@@ -23,11 +23,10 @@ Let's start by declaring some shell variables relating to your GCE environment:
 ```
 typeset -x PROJECT="make-tcp-fast"    # A GCE project name
 typeset -x ZONE="us-west1-a"          # A GCE Zone
-
 ```
 
 Next, we can create a VM to build the kernel with BBR. This will create a
-high-cpu instance with SSD disks to compile our kernel:
+Google Cloud instance to compile our kernel:
 
 ```
 gcloud compute \
@@ -41,14 +40,12 @@ gcloud compute \
   --image "/ubuntu-os-cloud/ubuntu-1604-xenial-v20160922" \
   --boot-disk-size "20" \
   --scopes default="https://www.googleapis.com/auth/devstorage.read_only","https://www.googleapis.com/auth/logging.write","https://www.googleapis.com/auth/monitoring.write","https://www.googleapis.com/auth/servicecontrol","https://www.googleapis.com/auth/service.management.readonly"
-
 ```
 After creating the instance; log in:
 
 
 ```
 gcloud compute ssh --project ${PROJECT} --zone ${ZONE} bbrtest1
-
 ```
 
 Then, on your GCE instance, use apt(8) to install the packages necessary to
@@ -63,8 +60,17 @@ sudo apt-get upgrade
 
 ## Obtain kernel sources with TCP BBR
 
-Since BBR was only recently contributed to Linux, we'll need to compile a
-development kernel that includes this feature.
+TCP BBR is in Linux v4.9 and beyond. However, we recommend compiling from the
+latest sources, from the networking development branch. In particular, the
+`davem/net-next` networking development branch (and Linux v4.20 and beyond)
+support
+[TCP-level pacing](https://git.kernel.org/pub/scm/linux/kernel/git/davem/net-next.git/commit/?id=218af599fa635b107cfe10acf3249c4dfe5e4123).
+This means that there is no longer a strict requirement to install the "fq"
+qdisc to use BBR. Any qdisc will work, though "fq" performs better for
+highly-loaded servers. (Note that TCP-level pacing was added in v4.13-rc1 but
+did not work well for BBR until a
+[fix](https://git.kernel.org/pub/scm/linux/kernel/git/davem/net-next.git/commit/?id=cadefe5f584abaac40dce72009e4de738cbff467)
+was added in 4.20.)
 
 For this guide, we'll grab the Linux networking development branch
 `davem/net-next` from `git.kernel.org`.
@@ -84,23 +90,13 @@ cd /usr/src/net-next
 ## Configure the kernel
 
 If you do not yet have a Linux kernel config for GCE, you can try the
-[config included in this tutorial](https://raw.githubusercontent.com/google/bbr/master/Documentation/config.gce). You can download that kernel config with:
-
-```
-wget  https://raw.githubusercontent.com/google/bbr/master/Documentation/config.gce
-```
-
-You can copy that kernel config to your GCE instance from your local host with:
-
-```
-gcloud compute copy-files --project ${PROJECT} --zone ${ZONE}  config.gce $USER@bbrtest1:/usr/src/net-next/.config
-```
-
-Then, on your GCE instance, update the config to select the defaults for any
-new config options added recently:
+[config included in this tutorial](https://raw.githubusercontent.com/google/bbr/master/Documentation/config.gce).
+On your GCE instance you can download that kernel config and then update that
+config to select the defaults for any new config options added recently:
 
 ```
 cd /usr/src/net-next
+wget -O .config https://raw.githubusercontent.com/google/bbr/master/Documentation/config.gce
 make olddefconfig
 ```
 
@@ -113,16 +109,6 @@ cd /usr/src/net-next
 make prepare
 make -j`nproc`
 make -j`nproc` modules
-```
-
-## Configure the machine
-
-On your GCE instance, configure the system, changing the default qdisc to fq,
-and default TCP congestion control to BBR:
-
-```
-sudo bash -c 'echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf'
-sudo bash -c 'echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf'
 ```
 
 ##  Install the kernel and reboot
@@ -150,11 +136,9 @@ build timestamp matching the kernel you compiled above:
 Linux bbrtest1 4.8.0-rc7+ #1 SMP Thu Sep 29 20:06:31 UTC 2016 x86_64 x86_64 x86_64 GNU/Linux
 ```
 
-Finally, on your GCE instance, confirm that the fq qdisc is installed and that
-BBR is being used:
+Finally, on your GCE instance, confirm that BBR is being used:
 
 ```
-tc qdisc show
 sysctl net.ipv4.tcp_congestion_control
 ```
 
@@ -162,22 +146,23 @@ Enjoy!
 
 ## Further reading
 
-If you already have a kernel config for GCE, then you can enable BBR and
-FQ. On your GCE instance, check that if you run:
+If you already have a kernel config for GCE, then you can just enable BBR,
+rebuild, and reboot. On your GCE instance, check that if you run:
 
 ```
 cd /usr/src/net-next
-egrep '(CONFIG_TCP_CONG_BBR|CONFIG_NET_SCH_FQ)=' .config
+egrep '(_BBR)' .config
 ```
 
 then you see exactly the following lines:
 
 ```
 CONFIG_TCP_CONG_BBR=y
-CONFIG_NET_SCH_FQ=y
-
+CONFIG_DEFAULT_BBR=y
 ```
 
 If you want to create your own .config, then just remember to include those two
 lines, and follow the
 [kernel/image requirements for GCE](https://cloud.google.com/compute/docs/tutorials/building-images).
+
+If you have questions about BBR, check the [BBR FAQ](https://github.com/google/bbr/blob/master/Documentation/bbr-faq.md).
